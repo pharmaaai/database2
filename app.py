@@ -18,11 +18,19 @@ paypalrestsdk.configure({
 
 # Google Sheets Setup
 SERVICE_ACCOUNT_FILE = "database-451514-f4ce49094858.json"  # Update with your actual file
-SPREADSHEET_NAME = "database"  # Update with your sheet name
+SHEET_NAME = "Database"
+
+# Open your Google Sheet (Replace 'YOUR_SHEET_NAME' with actual name)
+SHEET_NAME = "Database"
+sheet = client.open(SHEET_NAME).sheet1  # Access first sheet
+
+# Fetch all data
+data = sheet.get_all_records()
 
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets"])
 client = gspread.authorize(creds)
-sheet = client.open(SPREADSHEET_NAME).database
+SHEET_NAME = "Database"
+sheet = client.open(SHEET_NAME).sheet1  # Access first sheet
 
 # Function to fetch data
 @st.cache_data
