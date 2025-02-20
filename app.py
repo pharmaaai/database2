@@ -1,167 +1,113 @@
 import streamlit as st
-import gspread
 import pandas as pd
-import paypalrestsdk
+import gspread
 from google.oauth2.service_account import Credentials
+import requests
 
-# ==============================
-# ✅ Configure PayPal API
-# ==============================
-def configure_paypal():
-    try:
-        PAYPAL_CLIENT_ID = st.secrets["paypal"]["client_id"]
-        PAYPAL_CLIENT_SECRET = st.secrets["paypal"]["client_secret"]
-        PAYPAL_MODE = st.secrets["paypal"]["mode"]
+# 🔹 Define Google API Scopes (Google Sheets + Google Drive)
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-        paypalrestsdk.configure({
-            "mode": PAYPAL_MODE,
-            "client_id": PAYPAL_CLIENT_ID,
-            "client_secret": PAYPAL_CLIENT_SECRET
-        })
-        return True
-    except KeyError as e:
-        st.error(f"Missing PayPal credential: {e}")
-        return False
-
-# ==============================
-# ✅ Connect to Google Sheets
-# ==============================
-@st.cache_resource
-def connect_to_sheets():
+# 🔹 Function to Authenticate Google Sheets
+@st.cache_resource  # ✅ Caches credentials efficiently
+def get_gsheet_client():
     try:
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
+            scopes=SCOPES
         )
-        client = gspread.authorize(creds)
-        SHEET_NAME = "Database"
-        return client.open(SHEET_NAME).sheet1
+        return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"Error connecting to Google Sheets: {e}")
+        st.error(f"❌ Google Authentication Error: {e}")
         return None
 
-# ==============================
-# ✅ Fetch Data from Google Sheets
-# ==============================
-@st.cache_data
-def fetch_data(sheet):
-    if sheet:
+# 🔹 Cached function to fetch data from Google Sheets
+@st.cache_data  # ✅ Cache only the fetched data
+def fetch_data(sheet_name):
+    client = get_gsheet_client()
+    if client:
         try:
-            return pd.DataFrame(sheet.get_all_records())
+            sheet = client.open(sheet_name).sheet1  # Open the first sheet
+            data = sheet.get_all_records()
+            return pd.DataFrame(data)
         except Exception as e:
-            st.error(f"Error fetching data: {e}")
-            return pd.DataFrame()
+            st.error(f"❌ Error fetching data: {e}")
+            return pd.DataFrame()  # Return empty DataFrame if error occurs
     return pd.DataFrame()
 
-# ==============================
-# ✅ Calculate Pricing Based on Rows
-# ==============================
-def calculate_price(rows):
-    if rows <= 25:
-        return 1
-    elif rows <= 50:
-        return 2
-    elif rows <= 100:
-        return 4
-    elif rows <= 200:
-        return 8
-    elif rows <= 300:
-        return 12
-    elif rows <= 400:
-        return 16
-    else:
-        return 20 + ((rows - 500) // 100) * 4
-
-# ==============================
-# ✅ Process PayPal Payment
-# ==============================
-def process_payment(price, rows):
+# 🔹 PayPal Payment Processing Function
+def process_paypal_payment(amount, currency="USD"):
     try:
-        payment = paypalrestsdk.Payment({
-            "intent": "sale",
-            "payer": {"payment_method": "paypal"},
-            "transactions": [{
-                "amount": {"total": str(price), "currency": "USD"},
-                "description": f"Payment for {rows} job listings."
-            }],
-            "redirect_urls": {
-                "return_url": "http://localhost:8501",
-                "cancel_url": "http://localhost:8501"
-            }
-        })
+        # Load PayPal Credentials
+        paypal_client_id = st.secrets["PAYPAL_CLIENT_ID"]
+        paypal_secret = st.secrets["PAYPAL_SECRET"]
 
-        if payment.create():
-            return payment.links[1].href  # PayPal checkout link
-        else:
-            st.error("Payment failed.")
+        # Get PayPal Access Token
+        auth_response = requests.post(
+            "https://api-m.sandbox.paypal.com/v1/oauth2/token",
+            headers={"Accept": "application/json", "Accept-Language": "en_US"},
+            data={"grant_type": "client_credentials"},
+            auth=(paypal_client_id, paypal_secret),
+        )
+
+        if auth_response.status_code != 200:
+            st.error("❌ Failed to authenticate PayPal")
             return None
+
+        access_token = auth_response.json().get("access_token")
+
+        # Create a Payment Order
+        payment_response = requests.post(
+            "https://api-m.sandbox.paypal.com/v2/checkout/orders",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {access_token}",
+            },
+            json={
+                "intent": "CAPTURE",
+                "purchase_units": [{"amount": {"currency_code": currency, "value": amount}}],
+            },
+        )
+
+        if payment_response.status_code == 201:
+            order_data = payment_response.json()
+            return order_data.get("links", [])[1]["href"]  # Approval URL
+        else:
+            st.error("❌ Failed to create PayPal order")
+            return None
+
     except Exception as e:
-        st.error(f"Error processing payment: {e}")
+        st.error(f"❌ PayPal API Error: {e}")
         return None
 
-# ==============================
-# ✅ Streamlit UI
-# ==============================
+# 🔹 Main Function
 def main():
-    st.title("💼 Job Search & Purchase System")
+    st.title("📊 Google Sheets Data & PayPal Payment")
 
-    # ✅ Configure PayPal
-    if not configure_paypal():
-        return  # Stop execution if PayPal setup fails
+    # 🔹 Fetch Data from Google Sheets
+    SHEET_NAME = "Database"  # Change to your sheet name
+    df = fetch_data(SHEET_NAME)
 
-    # ✅ Connect to Google Sheets
-    sheet = connect_to_sheets()
-    if sheet is None:
-        return  # Stop execution if Google Sheets connection fails
+    # 🔹 Display Data
+    if not df.empty:
+        st.success("✅ Data loaded successfully!")
+        st.dataframe(df)
+    else:
+        st.warning("⚠ No data available.")
 
-    # ✅ Load Data
-    df = fetch_data(sheet)
-    
-    # ✅ Sidebar Filters
-    st.sidebar.header("🔍 Search Filters")
-    job_title = st.sidebar.text_input("Job Title")
-    company_name = st.sidebar.text_input("Company Name")
-    location = st.sidebar.text_input("Location")
-    years_of_experience = st.sidebar.text_input("Years of Experience")
-    salary = st.sidebar.text_input("Salary Range (e.g., 50,000-70,000)")
+    # 🔹 PayPal Payment Section
+    st.subheader("💳 Make a Payment")
+    amount = st.number_input("Enter Amount (USD)", min_value=1.0, step=0.1)
+    if st.button("Pay with PayPal"):
+        payment_url = process_paypal_payment(amount)
+        if payment_url:
+            st.success("✅ Payment link generated! Click below:")
+            st.markdown(f"[Pay Now]({payment_url})", unsafe_allow_html=True)
+        else:
+            st.error("⚠ Payment failed. Try again.")
 
-    # ✅ Apply Filters
-    filtered_df = df
-    if job_title:
-        filtered_df = filtered_df[filtered_df["Job Title"].str.contains(job_title, case=False, na=False)]
-    if company_name:
-        filtered_df = filtered_df[filtered_df["Company Name"].str.contains(company_name, case=False, na=False)]
-    if location:
-        filtered_df = filtered_df[filtered_df["Location"].str.contains(location, case=False, na=False)]
-    if years_of_experience:
-        filtered_df = filtered_df[filtered_df["Years of Experience"].astype(str).str.contains(years_of_experience, na=False)]
-    if salary:
-        filtered_df = filtered_df[filtered_df["Salary"].astype(str).str.contains(salary, na=False)]
-
-    # ✅ Display Results
-    rows = len(filtered_df)
-    st.write(f"### 🎯 Found *{rows}* matching jobs.")
-    st.dataframe(filtered_df)
-
-    # ✅ Pricing & Payment
-    price = calculate_price(rows)
-    st.write(f"💰 **Total Price: ${price}**")
-
-    if st.button("🔗 Proceed to Payment"):
-        payment_link = process_payment(price, rows)
-        if payment_link:
-            st.success("Click below to complete the payment:")
-            st.markdown(f"[👉 Pay Now]({payment_link})", unsafe_allow_html=True)
-
-    # ✅ CSV Download (Only Available After Payment)
-    if st.button("📥 Download Data (after payment)"):
-        file_path = "filtered_jobs.csv"
-        filtered_df.to_csv(file_path, index=False)
-        with open(file_path, "rb") as f:
-            st.download_button(label="📂 Download CSV", data=f, file_name="filtered_jobs.csv", mime="text/csv")
-
-# ==============================
-# ✅ Run the App
-# ==============================
+# 🔹 Run the app
 if __name__ == "__main__":
     main()
