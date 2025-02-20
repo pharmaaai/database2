@@ -4,7 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import requests
 
-# 🔹 Define Google API Scopes (Google Sheets + Google Drive)
+# 🔹 Google API Scopes
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
@@ -23,13 +23,13 @@ def get_gsheet_client():
         st.error(f"❌ Google Authentication Error: {e}")
         return None
 
-# 🔹 Cached function to fetch data from Google Sheets
+# 🔹 Fetch data from Google Sheets
 @st.cache_data
 def fetch_data(sheet_name):
     client = get_gsheet_client()
     if client:
         try:
-            sheet = client.open(sheet_name).sheet1  # Open first sheet
+            sheet = client.open(sheet_name).sheet1
             data = sheet.get_all_records()
             return pd.DataFrame(data)
         except Exception as e:
@@ -37,7 +37,7 @@ def fetch_data(sheet_name):
             return pd.DataFrame()
     return pd.DataFrame()
 
-# 🔹 PayPal Payment Processing Function
+# 🔹 PayPal Payment Function
 def process_paypal_payment(amount, currency="USD"):
     try:
         paypal_creds = st.secrets["paypal"]
@@ -56,12 +56,12 @@ def process_paypal_payment(amount, currency="USD"):
         )
 
         if auth_response.status_code != 200:
-            st.error("❌ Failed to authenticate PayPal")
+            st.error("❌ PayPal Authentication Failed")
             return None
 
         access_token = auth_response.json().get("access_token")
 
-        # Create a Payment Order
+        # Create PayPal Payment Order
         payment_response = requests.post(
             f"{PAYPAL_BASE_URL}/v2/checkout/orders",
             headers={
@@ -76,45 +76,61 @@ def process_paypal_payment(amount, currency="USD"):
 
         if payment_response.status_code == 201:
             order_data = payment_response.json()
-            return order_data.get("links", [])[1]["href"]  # Approval URL
+            return order_data.get("links", [])[1]["href"]  # PayPal Approval Link
         else:
-            st.error("❌ Failed to create PayPal order")
+            st.error("⚠ PayPal Payment Failed. Try Again.")
             return None
 
     except Exception as e:
         st.error(f"❌ PayPal API Error: {e}")
         return None
 
-# 🔹 Main Function
+# 🔹 Main App
 def main():
-    st.title("📊 Job Listings & PayPal Payment")
+    st.title("📊 Filter Job Listings & Pay for Access")
 
-    # 🔹 Fetch Data from Google Sheets
+    # Fetch Data from Google Sheets
     SHEET_NAME = "Database"  # Update with your sheet name
     df = fetch_data(SHEET_NAME)
 
-    # 🔹 Select Columns for Display
-    COLUMNS_TO_SHOW = [
-        "Number", "Job Title", "Posted Time (From 28 Jan)", "Company Name", 
-        "Location", "Job Link", "Resume", "Years of Experience", 
-        "Questions to Prepare", "Salary"
-    ]
+    if df.empty:
+        st.warning("⚠ No job data available.")
+        return
+
+    # 🔹 Filter Options
+    st.subheader("🔍 Filter Jobs")
     
-    if not df.empty:
-        df_filtered = df[COLUMNS_TO_SHOW]
+    job_title = st.text_input("🔹 Job Title (Contains):")
+    location = st.text_input("📍 Location (Contains):")
+    min_salary = st.number_input("💰 Minimum Salary ($)", min_value=0, value=0)
+    max_experience = st.number_input("⌛ Max Years of Experience:", min_value=0, value=10)
 
-        # User selects number of rows
-        st.subheader("🔍 Search & View Jobs")
-        num_rows = st.selectbox("Select number of rows to view:", [25, 50, 75, 100])
+    # 🔹 Apply Filters
+    filtered_df = df.copy()
 
-        # Display filtered rows
-        st.dataframe(df_filtered.head(num_rows))
+    if job_title:
+        filtered_df = filtered_df[filtered_df["Job Title"].str.contains(job_title, case=False, na=False)]
+    if location:
+        filtered_df = filtered_df[filtered_df["Location"].str.contains(location, case=False, na=False)]
+    if min_salary > 0:
+        filtered_df = filtered_df[filtered_df["Salary"].fillna(0).astype(float) >= min_salary]
+    if max_experience < 10:
+        filtered_df = filtered_df[filtered_df["Years of Experience"].fillna(0).astype(float) <= max_experience]
 
-        # Calculate pricing based on row count
-        price = (num_rows // 25) * 1  # $1 for 25 rows, $2 for 50, etc.
+    # 🔹 Number of Rows After Filtering
+    total_rows = len(filtered_df)
+    st.info(f"✅ Found **{total_rows}** jobs matching your criteria.")
+
+    # 🔹 Select Number of Rows to Purchase
+    if total_rows > 0:
+        max_rows = min(total_rows, 2000)  # Limit max purchase to 2000 rows
+        num_rows = st.select_slider("📊 Select Number of Rows to Unlock:", 
+                                    options=[i for i in range(25, max_rows+1, 25)], 
+                                    value=25)
+        price = (num_rows // 25) * 1  # $1 per 25 rows
 
         # 🔹 PayPal Payment Section
-        st.subheader("💳 Make a Payment")
+        st.subheader("💳 Pay for Access")
         st.write(f"💲 Price: **${price}** for {num_rows} job listings.")
 
         if st.button("Pay with PayPal"):
@@ -122,11 +138,14 @@ def main():
             if payment_url:
                 st.success("✅ Payment link generated! Click below:")
                 st.markdown(f"[Pay Now]({payment_url})", unsafe_allow_html=True)
+                st.session_state["paid"] = True  # Mark payment as done
             else:
                 st.error("⚠ Payment failed. Try again.")
-    else:
-        st.warning("⚠ No data available.")
 
-# 🔹 Run the app
+        # 🔹 Show Data Only After Payment
+        if "paid" in st.session_state and st.session_state["paid"]:
+            st.success("✅ Payment Successful! Here are your job listings:")
+            st.dataframe(filtered_df.head(num_rows))
+
 if __name__ == "__main__":
     main()
