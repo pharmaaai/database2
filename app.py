@@ -31,7 +31,7 @@ def connect_to_sheets():
     try:
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            scopes=["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
         )
         client = gspread.authorize(creds)
         SHEET_NAME = "Database"
