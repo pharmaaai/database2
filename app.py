@@ -20,7 +20,7 @@ paypalrestsdk.configure({
 SERVICE_ACCOUNT_FILE = "database-451514-f4ce49094858.json"  # Update with your actual file
 SPREADSHEET_NAME = "Database"  # Update with your sheet name
 
-creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets"])
 client = gspread.authorize(creds)
 sheet = client.open(SPREADSHEET_NAME).sheet1
 
