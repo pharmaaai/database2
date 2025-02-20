@@ -29,7 +29,7 @@ def fetch_data(sheet_name):
     client = get_gsheet_client()
     if client:
         try:
-            sheet = client.open(sheet_name).sheet1  # Open first sheet
+            sheet = client.open(sheet_name).sheet2  # Open first sheet
             data = sheet.get_all_records()
             return pd.DataFrame(data)
         except Exception as e:
