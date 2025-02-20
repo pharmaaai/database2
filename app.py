@@ -10,11 +10,10 @@ from paypalrestsdk import Payment
 PAYPAL_CLIENT_ID = "AYOIVcJrZDiCFTnyZXBNTmD1NuAzYCwx9drBc_pN1XKMuYA_R0qecAPtsrHlstml32f4kXVv6bAqOVKo"
 PAYPAL_CLIENT_SECRET = "EKQUW_Q4VnjcR4wgM5LcXhYRF7UKY2ZmgLJ13yvmL5bwFLwev-RqMbhId6LZJjZ1EF7FJm0FFm6o-2dL"
 
-# Configure PayPal SDK
-Payment.configure({
-    "mode": "sandbox",  # Change to 'live' for production
-    "client_id": PAYPAL_CLIENT_ID,
-    "client_secret": PAYPAL_CLIENT_SECRET,
+paypalrestsdk.configure({
+    "mode": "sandbox",  # Change to "live" for production
+    "client_id": "AYOIVcJrZDiCFTnyZXBNTmD1NuAzYCwx9drBc_pN1XKMuYA_R0qecAPtsrHlstml32f4kXVv6bAqOVKo",
+    "client_secret": "EKQUW_Q4VnjcR4wgM5LcXhYRF7UKY2ZmgLJ13yvmL5bwFLwev-RqMbhId6LZJjZ1EF7FJm0FFm6o-2dL"
 })
 
 # Google Sheets Setup
