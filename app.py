@@ -1,102 +1,75 @@
 import streamlit as st
-import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-import requests
-import json
+import pandas as pd
 
-# 🔹 Define Google API Scopes
+# Google Sheets API Credentials
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
-# 🔹 Authenticate Google Sheets
+# Function to connect to Google Sheets
 @st.cache_resource
-def get_gsheet_client():
+def connect_to_sheets():
     try:
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
-        return gspread.authorize(creds)
+        client = gspread.authorize(creds)
+        return client
     except Exception as e:
-        st.error(f"❌ Google Authentication Error: {e}")
+        st.error(f"❌ Failed to connect to Google Sheets: {e}")
         return None
 
-# 🔹 Fetch Data from Google Sheets
-@st.cache_data
-def fetch_data(sheet_name):
-    client = get_gsheet_client()
+# Function to fetch data
+def fetch_data():
+    client = connect_to_sheets()
     if not client:
         return None
+
     try:
-        sheet = client.open(sheet_name).sheet1
-        data = sheet.get_all_records()
-        return pd.DataFrame(data)
+        sheet = client.open("H1B_Job_Data").sheet1  # Ensure this matches your actual sheet name
+        data = sheet.get_all_records()  # Fetch data as a list of dictionaries
+        return pd.DataFrame(data) if data else None
     except Exception as e:
         st.error(f"❌ Failed to fetch data: {e}")
         return None
 
-# 🔹 Main Function
-def main():
-    st.title("💼 H1B Visa & Job Data Marketplace")
+# Streamlit UI
+st.title("H1B Job Data Search")
 
-    # Load Data
-    df = fetch_data("H1B_Job_Data")
-    if df is None or df.empty:
-        st.error("❌ No data available. Please try again later.")
-        return
+# Load data
+df = fetch_data()
+if df is None or df.empty:
+    st.error("❌ No data available. Please try again later.")
+    st.stop()
 
-    # Ensure correct columns exist
-    required_columns = {"EMPLOYER_NAME", "JOB_TITLE", "WAGE_RATE_OF_PAY_FROM"}
-    if not required_columns.issubset(df.columns):
-        st.error("❌ Missing required columns in the dataset!")
-        return
+# Ensure required columns exist
+REQUIRED_COLUMNS = {"EMPLOYER_NAME", "JOB_TITLE", "WAGE_RATE_OF_PAY_FROM"}
+if not REQUIRED_COLUMNS.issubset(df.columns):
+    st.error("❌ Data format issue: Required columns are missing.")
+    st.stop()
 
-    # User Query Input
-    employer_name = st.text_input("🔍 Enter Employer Name (Optional):").strip()
-    job_title = st.text_input("🔍 Enter Job Title (Optional):").strip()
-    salary_range = st.number_input("💰 Minimum Salary (USD):", min_value=0, step=1000)
+# User Input Fields
+st.subheader("🔍 Search for H1B Job Data")
+employer_name = st.text_input("Enter Employer Name (or leave blank for all)")
+job_title = st.text_input("Enter Job Title (or leave blank for all)")
+salary_range = st.number_input("Minimum Salary ($)", min_value=0, step=1000, value=0)
 
-    # Filter Data
-    query = True
-    if employer_name:
-        query &= df["EMPLOYER_NAME"].str.contains(employer_name, case=False, na=False)
-    if job_title:
-        query &= df["JOB_TITLE"].str.contains(job_title, case=False, na=False)
-    if salary_range > 0:
-        query &= df["WAGE_RATE_OF_PAY_FROM"] >= salary_range
+# Filter Data
+filtered_df = df[
+    (df["EMPLOYER_NAME"].str.contains(employer_name, case=False, na=False) if employer_name else True) &
+    (df["JOB_TITLE"].str.contains(job_title, case=False, na=False) if job_title else True) &
+    (df["WAGE_RATE_OF_PAY_FROM"] >= salary_range)
+]
 
-    df_filtered = df[query]
+# Show results summary
+num_records = len(filtered_df)
+st.write(f"🔹 **Matching Records:** {num_records}")
 
-    # Show Count of Matching Records
-    num_records = len(df_filtered)
-    st.info(f"✅ {num_records} matching job records found.")
+if num_records > 0:
+    # Pricing calculation
+    total_price = max(num_records * 0.04, 5)  # $0.04 per row, minimum $5
+    st.write(f"💰 **Price: ${total_price:.2f}**")
 
-    # Pricing Calculation
-    price_per_row = 0.04
-    total_price = max(num_records * price_per_row, 5.00)  # Minimum $5
-    st.write(f"💲 Total Cost: **${total_price:.2f}**")
-
-    # Payment Processing (Razorpay)
+    # Payment Button
     if st.button("Proceed to Payment"):
-        order_data = {
-            "amount": int(total_price * 100),  # Convert to cents
-            "currency": "USD",
-            "receipt": "job_data_purchase"
-        }
-
-        headers = {
-            "Authorization": f"Basic {st.secrets['razorpay_api_key']}",
-            "Content-Type": "application/json"
-        }
-
-        response = requests.post(
-            "https://api.razorpay.com/v1/orders",
-            headers=headers,
-            data=json.dumps(order_data)
-        )
-
-        if response.status_code == 200:
-            payment_link = response.json().get("short_url", "#")
-            st.success(f"✅ Payment Successful! Download your data: [Click Here]({payment_link})")
-        else:
-            st.error("❌ Payment Failed. Please try again.")
-
-if __name__ == "__main__":
-    main()
+        st.success("✅ Payment processing... You will receive access after confirmation.")
+else:
+    st.warning("⚠️ No matching records found. Try different search criteria.")
