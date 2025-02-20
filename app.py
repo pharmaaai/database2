@@ -1,39 +1,37 @@
-
-import paypalrestsdk
 import gspread
 import pandas as pd
 import streamlit as st
 from google.oauth2.service_account import Credentials
 from paypalrestsdk import Payment
+import paypalrestsdk
 
-# PayPal API Credentials (Replace with actual credentials)
-PAYPAL_CLIENT_ID = "AYOIVcJrZDiCFTnyZXBNTmD1NuAzYCwx9drBc_pN1XKMuYA_R0qecAPtsrHlstml32f4kXVv6bAqOVKo"
-PAYPAL_CLIENT_SECRET = "EKQUW_Q4VnjcR4wgM5LcXhYRF7UKY2ZmgLJ13yvmL5bwFLwev-RqMbhId6LZJjZ1EF7FJm0FFm6o-2dL"
+# PayPal API Credentials
+PAYPAL_CLIENT_ID = st.secrets["PAYPAL_CLIENT_ID"]
+PAYPAL_CLIENT_SECRET = st.secrets["PAYPAL_CLIENT_SECRET"]
 
 paypalrestsdk.configure({
     "mode": "sandbox",  # Change to "live" for production
-    "client_id": "AYOIVcJrZDiCFTnyZXBNTmD1NuAzYCwx9drBc_pN1XKMuYA_R0qecAPtsrHlstml32f4kXVv6bAqOVKo",
-    "client_secret": "EKQUW_Q4VnjcR4wgM5LcXhYRF7UKY2ZmgLJ13yvmL5bwFLwev-RqMbhId6LZJjZ1EF7FJm0FFm6o-2dL"
+    "client_id": PAYPAL_CLIENT_ID,
+    "client_secret": PAYPAL_CLIENT_SECRET
 })
 
-
-
-
-creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets"])
+# Google Sheets Authentication (from Streamlit secrets)
+creds = Credentials.from_service_account_info(
+    st.secrets["gcp_service_account"],
+    scopes=["https://www.googleapis.com/auth/spreadsheets"]
+)
 client = gspread.authorize(creds)
+
+# Open Google Sheet
 SHEET_NAME = "Database"
 sheet = client.open(SHEET_NAME).sheet1  # Access first sheet
 
-# Fetch all data
-data = sheet.get_all_records()
-
-# Function to fetch data
+# Function to Fetch Data
 @st.cache_data
 def get_data():
-    data = sheet.get_all_records()
-    return pd.DataFrame(data)
+    return pd.DataFrame(sheet.get_all_records())
 
-# Pricing Logic
+# Function to Calculate Price
 def calculate_price(rows):
     if rows <= 25:
         return 1
@@ -64,7 +62,7 @@ years_of_experience = st.sidebar.text_input("Years of Experience")
 salary = st.sidebar.text_input("Salary Range (e.g., 50,000-70,000)")
 
 # Filter Data
-filtered_df = df
+filtered_df = df.copy()
 if job_title:
     filtered_df = filtered_df[filtered_df["Job Title"].str.contains(job_title, case=False, na=False)]
 if company_name:
@@ -102,7 +100,10 @@ if st.button("Proceed to Payment"):
 
     if payment.create():
         st.success("Click below to complete the payment:")
-        st.markdown(f"[Pay Now]({payment.links[1].href})", unsafe_allow_html=True)
+        for link in payment.links:
+            if link.rel == "approval_url":
+                st.markdown(f"[Pay Now]({link.href})", unsafe_allow_html=True)
+                break
     else:
         st.error("Payment failed.")
 
