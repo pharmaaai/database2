@@ -108,4 +108,5 @@ if st.button("Proceed to Payment"):
 if st.button("Download Data (after payment)"):
     file_path = "filtered_jobs.csv"
     filtered_df.to_csv(file_path, index=False)
-    st.download_button("Download CSV", open(file_path, "rb"), "filtered_jobs.csv", "text/csv")
+    with open(file_path, "rb") as f:
+    st.download_button(label="Download CSV", data=f, file_name="filtered_jobs.csv", mime="text/csv")
