@@ -1,0 +1,6 @@
+gspread
+pandas
+streamlit
+flask
+paypalrestsdk
+pyhton-dotenv
