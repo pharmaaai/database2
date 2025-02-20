@@ -1,137 +1,134 @@
 import streamlit as st
-import requests
 import pandas as pd
-import json
+import gspread
+from google.oauth2.service_account import Credentials
+import requests
 
-# Load PayPal credentials from secrets
-PAYPAL_CLIENT_ID = st.secrets["paypal"]["PAYPAL_CLIENT_ID"]
-PAYPAL_SECRET = st.secrets["paypal"]["PAYPAL_SECRET"]
-PAYPAL_MODE = st.secrets["paypal"]["PAYPAL_MODE"]  # Should be 'sandbox' for testing
+# 🔹 Define Google API Scopes (Google Sheets + Google Drive)
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
-PAYPAL_API_URL = "https://api-m.sandbox.paypal.com" if PAYPAL_MODE == "sandbox" else "https://api-m.paypal.com"
-
-# Define payment logic
-PRICE_PER_25_ROWS = 1  # $1 per 25 rows
-MAX_ROWS = 2000  # Maximum rows user can purchase
-FREE_LIMIT = 0  # No free rows
-
-# Dummy DataFrame (Replace with Google Sheets Data)
-data = {
-    "Company": ["Pfizer", "Moderna", "AstraZeneca", "GSK", "Novartis"],
-    "Role": ["Scientist", "Analyst", "Researcher", "Manager", "Consultant"],
-    "Salary": [100000, 95000, 87000, 120000, 110000],
-    "Years of Experience": [5, 4, 3, 6, 7],
-}
-df = pd.DataFrame(data)
-
-def authenticate_paypal():
-    """Get PayPal access token"""
-    auth = (PAYPAL_CLIENT_ID, PAYPAL_SECRET)
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    data = {"grant_type": "client_credentials"}
-
-    response = requests.post(f"{PAYPAL_API_URL}/v1/oauth2/token", headers=headers, data=data, auth=auth)
-    if response.status_code == 200:
-        return response.json()["access_token"]
-    else:
-        st.error(f"PayPal Authentication Failed: {response.json()}")
+# 🔹 Function to Authenticate Google Sheets
+@st.cache_resource
+def get_gsheet_client():
+    try:
+        creds = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"],
+            scopes=SCOPES
+        )
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"❌ Google Authentication Error: {e}")
         return None
 
-def create_paypal_order(amount):
-    """Create a PayPal order"""
-    access_token = authenticate_paypal()
-    if not access_token:
-        return None
+# 🔹 Cached function to fetch data from Google Sheets
+@st.cache_data
+def fetch_data(sheet_name):
+    client = get_gsheet_client()
+    if client:
+        try:
+            sheet = client.open(sheet_name).sheet1  # Open first sheet
+            data = sheet.get_all_records()
+            return pd.DataFrame(data)
+        except Exception as e:
+            st.error(f"❌ Error fetching data: {e}")
+            return pd.DataFrame()
+    return pd.DataFrame()
 
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {access_token}",
-    }
+# 🔹 PayPal Payment Processing Function
+def process_paypal_payment(amount, currency="USD"):
+    try:
+        paypal_creds = st.secrets["paypal"]
+        PAYPAL_CLIENT_ID = paypal_creds["PAYPAL_CLIENT_ID"]
+        PAYPAL_SECRET = paypal_creds["PAYPAL_SECRET"]
+        PAYPAL_MODE = paypal_creds.get("PAYPAL_MODE", "sandbox")
 
-    payload = {
-        "intent": "CAPTURE",
-        "purchase_units": [
-            {
-                "amount": {"currency_code": "USD", "value": f"{amount:.2f}"},
+        PAYPAL_BASE_URL = "https://api-m.sandbox.paypal.com" if PAYPAL_MODE == "sandbox" else "https://api-m.paypal.com"
+
+        # Get PayPal Access Token
+        auth_response = requests.post(
+            f"{PAYPAL_BASE_URL}/v1/oauth2/token",
+            headers={"Accept": "application/json", "Accept-Language": "en_US"},
+            auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
+            data={"grant_type": "client_credentials"}
+        )
+
+        if auth_response.status_code != 200:
+            st.error("❌ Failed to authenticate PayPal")
+            return None
+
+        access_token = auth_response.json().get("access_token")
+
+        # Create a Payment Order
+        payment_response = requests.post(
+            f"{PAYPAL_BASE_URL}/v2/checkout/orders",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {access_token}"
+            },
+            json={
+                "intent": "CAPTURE",
+                "purchase_units": [{"amount": {"currency_code": currency, "value": amount}}]
             }
-        ],
-        "application_context": {
-            "return_url": "https://your-streamlit-app.com/success",
-            "cancel_url": "https://your-streamlit-app.com/cancel",
-        },
-    }
+        )
 
-    response = requests.post(f"{PAYPAL_API_URL}/v2/checkout/orders", headers=headers, json=payload)
-    
-    if response.status_code == 201:
-        order_data = response.json()
-        return order_data["links"][1]["href"]  # Redirect URL for user payment
-    else:
-        st.error(f"Failed to create PayPal order: {response.json()}")
+        if payment_response.status_code == 201:
+            order_data = payment_response.json()
+            return order_data.get("links", [])[1]["href"]  # Approval URL
+        else:
+            st.error("❌ Failed to create PayPal order")
+            return None
+
+    except Exception as e:
+        st.error(f"❌ PayPal API Error: {e}")
         return None
 
-def verify_payment(order_id):
-    """Verify payment status after redirection"""
-    access_token = authenticate_paypal()
-    if not access_token:
-        return False
+# 🔹 Main Function
+def main():
+    st.title("📊 H1B Visa Job Listings & PayPal Payment")
 
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
+    # 🔹 Fetch Data from Google Sheets
+    SHEET_NAME = "Database"  # Update with your sheet name
+    df = fetch_data(SHEET_NAME)
 
-    response = requests.get(f"{PAYPAL_API_URL}/v2/checkout/orders/{order_id}", headers=headers)
+    # 🔹 Select Columns for Display
+    COLUMNS_TO_SHOW = [
+        "CASE_NUMBER", "CASE_STATUS", "RECEIVED_DATE", "DECISION_DATE",
+        "VISA_CLASS", "JOB_TITLE", "SOC_CODE", "SOC_TITLE",
+        "EMPLOYER_NAME", "EMPLOYER_CITY", "EMPLOYER_STATE",
+        "WORKSITE_CITY", "WORKSITE_STATE", "WAGE_RATE_OF_PAY_FROM",
+        "WAGE_UNIT_OF_PAY"
+    ]
 
-    if response.status_code == 200:
-        order_status = response.json().get("status")
-        return order_status == "COMPLETED"
-    return False
+    if not df.empty:
+        df_filtered = df[COLUMNS_TO_SHOW]
 
-# Streamlit UI
-st.title("Pharma Jobs Data Marketplace")
+        # User selects number of rows
+        st.subheader("🔍 Search & View Jobs")
+        num_rows = st.selectbox("Select number of rows to view:", [25, 50, 75, 100])
 
-# Query Section
-st.sidebar.header("Filter Criteria")
+        # Display filtered rows
+        st.dataframe(df_filtered.head(num_rows))
 
-selected_role = st.sidebar.selectbox("Select Role", ["All"] + df["Role"].unique().tolist())
-selected_experience = st.sidebar.slider("Minimum Years of Experience", min_value=0, max_value=10, value=0)
+        # Calculate pricing based on row count
+        price = (num_rows // 25) * 1  # $1 for 25 rows, $2 for 50, etc.
 
-# Filter Data
-filtered_df = df.copy()
-if selected_role != "All":
-    filtered_df = filtered_df[filtered_df["Role"] == selected_role]
+        # 🔹 PayPal Payment Section
+        st.subheader("💳 Make a Payment")
+        st.write(f"💲 Price: *${price}* for {num_rows} job listings.")
 
-filtered_df = filtered_df[filtered_df["Years of Experience"] >= selected_experience]
-
-st.write("### Filtered Results (Preview)")
-st.dataframe(filtered_df.head(5))  # Show only first 5 rows for preview
-
-# Payment Calculation
-total_rows = len(filtered_df)
-if total_rows <= FREE_LIMIT:
-    st.success("Your query is within the free limit. You can download it now.")
-    st.download_button("Download Data", data=filtered_df.to_csv().encode(), file_name="filtered_data.csv", mime="text/csv")
-else:
-    num_blocks = (total_rows - FREE_LIMIT) // 25 + (1 if (total_rows - FREE_LIMIT) % 25 > 0 else 0)
-    total_price = num_blocks * PRICE_PER_25_ROWS
-    total_price = min(total_price, (MAX_ROWS // 25) * PRICE_PER_25_ROWS)  # Cap at $80 for 2000 rows
-
-    st.write(f"**Rows:** {total_rows} | **Cost:** ${total_price:.2f}")
-    
-    if st.button("Pay with PayPal"):
-        payment_url = create_paypal_order(total_price)
-        if payment_url:
-            st.markdown(f"[Click Here to Pay]({payment_url})")
-        else:
-            st.error("Payment initiation failed. Try again.")
-
-# Payment Verification (After Redirect)
-if "order_id" in st.query_params:
-    order_id = st.query_params["order_id"]
-    if verify_payment(order_id):
-        st.success("Payment successful! You can now download the data.")
-        st.download_button("Download Data", data=filtered_df.to_csv().encode(), file_name="filtered_data.csv", mime="text/csv")
+        if st.button("Pay with PayPal"):
+            payment_url = process_paypal_payment(price)
+            if payment_url:
+                st.success("✅ Payment link generated! Click below:")
+                st.markdown(f"[Pay Now]({payment_url})", unsafe_allow_html=True)
+            else:
+                st.error("⚠ Payment failed. Try again.")
     else:
-        st.error("Payment verification failed. Contact support.")
+        st.warning("⚠ No data available.")
 
+# 🔹 Run the app
+if __name__ == "__main__":
+    main()
