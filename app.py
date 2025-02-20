@@ -31,7 +31,14 @@ def fetch_data(sheet_name):
         try:
             sheet = client.open(sheet_name).sheet1
             data = sheet.get_all_records()
-            return pd.DataFrame(data)
+            df = pd.DataFrame(data)
+
+            # Fix "Years of Experience" column (convert to numeric)
+            if "Years of Experience" in df.columns:
+                df["Years of Experience"] = pd.to_numeric(df["Years of Experience"], errors="coerce")
+                df["Years of Experience"].fillna(0, inplace=True)  # Replace NaN with 0
+            
+            return df
         except Exception as e:
             st.error(f"Error fetching data: {e}")
             return pd.DataFrame()
@@ -100,11 +107,11 @@ def main():
     location = st.text_input("Location")
     min_experience, max_experience = st.slider("Years of Experience", 0, 20, (0, 10))
 
+    # Ensure experience filtering works without errors
     filtered_df = df[
         (df["Job Title"].str.contains(job_title, case=False, na=False)) &
         (df["Location"].str.contains(location, case=False, na=False)) &
-        (df["Years of Experience"] >= min_experience) &
-        (df["Years of Experience"] <= max_experience)
+        (df["Years of Experience"].between(min_experience, max_experience))
     ]
 
     num_results = len(filtered_df)
