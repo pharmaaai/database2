@@ -33,10 +33,9 @@ def fetch_data(sheet_name):
             data = sheet.get_all_records()
             df = pd.DataFrame(data)
 
-            # Fix "Years of Experience" column (convert to numeric)
+            # Convert "Years of Experience" to numeric
             if "Years of Experience" in df.columns:
-                df["Years of Experience"] = pd.to_numeric(df["Years of Experience"], errors="coerce")
-                df["Years of Experience"].fillna(0, inplace=True)  # Replace NaN with 0
+                df["Years of Experience"] = pd.to_numeric(df["Years of Experience"], errors="coerce").fillna(0)
             
             return df
         except Exception as e:
@@ -47,26 +46,31 @@ def fetch_data(sheet_name):
 # PayPal Payment Processing
 def process_paypal_payment(amount):
     try:
-        paypal_client_id = st.secrets["PAYPAL_CLIENT_ID"]
-        paypal_secret = st.secrets["PAYPAL_SECRET"]
+        paypal_creds = st.secrets["paypal"]
+        paypal_client_id = paypal_creds["PAYPAL_CLIENT_ID"]
+        paypal_secret = paypal_creds["PAYPAL_SECRET"]
+        paypal_mode = paypal_creds.get("PAYPAL_MODE", "sandbox")  # Default to sandbox
+
+        # Select API URL based on mode
+        base_url = "https://api-m.sandbox.paypal.com" if paypal_mode == "sandbox" else "https://api-m.paypal.com"
 
         # Authenticate with PayPal
         auth_response = requests.post(
-            "https://api-m.sandbox.paypal.com/v1/oauth2/token",
+            f"{base_url}/v1/oauth2/token",
             headers={"Accept": "application/json", "Accept-Language": "en_US"},
             data={"grant_type": "client_credentials"},
             auth=(paypal_client_id, paypal_secret),
         )
 
         if auth_response.status_code != 200:
-            st.error("PayPal Authentication Failed")
+            st.error(f"PayPal Authentication Failed: {auth_response.text}")
             return None
 
         access_token = auth_response.json().get("access_token")
 
         # Create PayPal Order
         payment_response = requests.post(
-            "https://api-m.sandbox.paypal.com/v2/checkout/orders",
+            f"{base_url}/v2/checkout/orders",
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {access_token}",
@@ -81,7 +85,7 @@ def process_paypal_payment(amount):
             order_data = payment_response.json()
             return order_data.get("links", [])[1]["href"]  # Payment URL
         else:
-            st.error("Failed to create PayPal order")
+            st.error(f"Failed to create PayPal order: {payment_response.text}")
             return None
 
     except Exception as e:
@@ -107,7 +111,7 @@ def main():
     location = st.text_input("Location")
     min_experience, max_experience = st.slider("Years of Experience", 0, 20, (0, 10))
 
-    # Ensure experience filtering works without errors
+    # Apply Filters
     filtered_df = df[
         (df["Job Title"].str.contains(job_title, case=False, na=False)) &
         (df["Location"].str.contains(location, case=False, na=False)) &
