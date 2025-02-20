@@ -18,8 +18,6 @@ paypalrestsdk.configure({
 
 
 
-# Fetch all data
-data = sheet.get_all_records()
 
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets"])
 client = gspread.authorize(creds)
