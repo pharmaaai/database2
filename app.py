@@ -22,7 +22,7 @@ SPREADSHEET_NAME = "Database"  # Update with your sheet name
 
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=["https://www.googleapis.com/auth/spreadsheets"])
 client = gspread.authorize(creds)
-sheet = client.open(SPREADSHEET_NAME).sheet1
+sheet = client.open(SPREADSHEET_NAME).database
 
 # Function to fetch data
 @st.cache_data
