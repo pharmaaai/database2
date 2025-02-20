@@ -82,7 +82,7 @@ def process_paypal_payment(amount, currency="USD"):
 
 # 🔹 Main Function
 def main():
-    st.title("📊 H1B Visa Job Listings & PayPal Payment")
+    st.title("📊 H1B Visa Job Listings & Secure Payment")
 
     # 🔹 Fetch Data from Google Sheets
     SHEET_NAME = "Database"  # Update with your sheet name
@@ -95,13 +95,9 @@ def main():
     # 🔹 Normalize column names for robust access
     df.columns = df.columns.str.lower().str.strip()
 
-    # 🔹 Define Columns to Display (Ensure Case Insensitivity)
+    # 🔹 Define Columns to Search
     required_columns = [
-        "case_number", "case_status", "received_date", "decision_date",
-        "visa_class", "job_title", "soc_code", "soc_title",
-        "employer_name", "employer_city", "employer_state",
-        "worksite_city", "worksite_state", "wage_rate_of_pay_from",
-        "wage_unit_of_pay"
+        "company_name", "job_title", "wage_rate_of_pay_from"
     ]
 
     missing_columns = [col for col in required_columns if col not in df.columns]
@@ -109,26 +105,44 @@ def main():
         st.error(f"❌ Missing columns in Google Sheet: {', '.join(missing_columns)}")
         return
 
-    # 🔹 Filter Data
-    df_filtered = df[required_columns]
+    # 🔹 User Input for Search
+    st.subheader("🔍 Search for Jobs")
+    company_name = st.text_input("Enter Company Name:")
+    job_role = st.text_input("Enter Job Role:")
+    salary_min = st.number_input("Enter Minimum Salary ($):", min_value=0, step=5000)
 
-    # 🔹 Display Jobs with User Selection
-    st.subheader("🔍 Search & View Jobs")
-    num_rows = st.selectbox("Select number of rows to view:", [25, 50, 75, 100])
-    st.dataframe(df_filtered.head(num_rows))
+    if st.button("Search"):
+        if not company_name or not job_role or salary_min <= 0:
+            st.warning("⚠ Please enter all fields correctly.")
+            return
 
-    # 🔹 Dynamic Pricing ($1 per 25 rows)
-    price = (num_rows // 25) * 1
-    st.subheader("💳 Make a Payment")
-    st.write(f"💲 Price: *${price}* for {num_rows} job listings.")
+        # 🔹 Filter Data Based on User Input
+        df_filtered = df[
+            (df["company_name"].str.contains(company_name, case=False, na=False)) &
+            (df["job_title"].str.contains(job_role, case=False, na=False)) &
+            (df["wage_rate_of_pay_from"] >= salary_min)
+        ]
 
-    if st.button("Pay with PayPal"):
-        payment_url = process_paypal_payment(price)
-        if payment_url:
-            st.success("✅ Payment link generated! Click below:")
-            st.markdown(f"[Pay Now]({payment_url})", unsafe_allow_html=True)
-        else:
-            st.error("⚠ Payment failed. Try again.")
+        num_results = len(df_filtered)
+
+        if num_results == 0:
+            st.warning("⚠ No matching jobs found.")
+            return
+
+        # 🔹 Show Available Count
+        st.success(f"✅ Found {num_results} job listings.")
+
+        # 🔹 Calculate Price ($0.04 per row, min $5)
+        total_price = max(5, num_results * 0.04)
+        st.write(f"💲 Price: **${total_price:.2f}** for {num_results} job listings.")
+
+        if st.button("Pay with PayPal"):
+            payment_url = process_paypal_payment(total_price)
+            if payment_url:
+                st.success("✅ Payment link generated! Click below:")
+                st.markdown(f"[Pay Now]({payment_url})", unsafe_allow_html=True)
+            else:
+                st.error("⚠ Payment failed. Try again.")
 
 # 🔹 Run the app
 if __name__ == "__main__":
