@@ -1,145 +1,331 @@
 import streamlit as st
-import gspread
 import pandas as pd
-import paypalrestsdk
-from google.oauth2.service_account import Credentials
+from pinecone import Pinecone, ServerlessSpec
+from sentence_transformers import SentenceTransformer
+from langgraph.graph import StateGraph, END
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
+from typing import TypedDict, List, Annotated
+import operator
+import time
+from database import init_db, get_user_by_username, verify_password, update_last_login
 
-# Constants
-MIN_PRICE = 5.00  # Minimum charge
-PRICE_PER_ROW = 0.04  # Price per record
-REQUIRED_COLUMNS = {"EMPLOYER_NAME", "JOB_TITLE", "WAGE_RATE_OF_PAY_FROM"}
+# Set page config
+st.set_page_config(
+    page_title="AI Career Assistant",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Google Sheets API Credentials
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+# Remove Streamlit UI elements
+st.markdown("""
+<style>
+    /* Hide header, footer, and menu */
+    header { visibility: hidden; }
+    .stApp > header { display: none; }
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    /* Hide deploy button */
+    .stDeployButton { display: none; }
+    /* Hide 'Manage app' button */
+    [data-testid="manage-app-button"] { display: none; }
+    /* Hide GitHub icon */
+    [data-testid="stHeader"] [data-testid="stDecoration"] { display: none; }
+    /* Hide three-dot menu */
+    [data-testid="stActionButton"] { display: none; }
+    /* Hide pen symbol */
+    [data-testid="stToolbar"] { display: none; }
+</style>
+""", unsafe_allow_html=True)
 
-# PayPal API Credentials (from Streamlit secrets)
-PAYPAL_MODE = st.secrets["paypal"]["mode"]  # "sandbox" or "live"
-PAYPAL_CLIENT_ID = st.secrets["paypal"]["client_id"]
-PAYPAL_CLIENT_SECRET = st.secrets["paypal"]["client_secret"]
+# Rest of your code...
 
-# Initialize PayPal SDK
-paypalrestsdk.configure({
-    "mode": PAYPAL_MODE,
-    "client_id": PAYPAL_CLIENT_ID,
-    "client_secret": PAYPAL_CLIENT_SECRET
-})
+# Professional CSS styling
+st.markdown("""
+<style>
+    .main { background-color: #ffffff; }
+    .stButton>button {
+        background-color: #2c3e50;
+        color: white;
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        background-color: #1a2833;
+        transform: translateY(-1px);
+    }
+    .stTextInput input, .stTextArea textarea {
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 10px;
+        font-size: 14px;
+    }
+    .stDataFrame {
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    .stMarkdown h1 {
+        color: #2c3e50;
+        border-bottom: 2px solid #2c3e50;
+        padding-bottom: 0.5rem;
+    }
+    .stMarkdown h2 {
+        color: #34495e;
+        margin-top: 1.5rem;
+    }
+    .stSidebar {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-right: 1px solid #e0e0e0;
+    }
+    .analysis-section {
+        background-color: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Function to connect to Google Sheets
-@st.cache_resource
-def connect_to_sheets():
-    """Authenticate and connect to Google Sheets."""
+# Initialize database
+init_db()
+
+# Get secrets
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
+INDEX_NAME = "rajan"
+EMBEDDING_DIMENSION = 384
+
+# Define State for LangGraph
+class AgentState(TypedDict):
+    resume_text: str
+    jobs: List[dict]
+    history: Annotated[List[str], operator.add]
+    current_response: str
+    selected_job: dict
+
+# Initialize Pinecone
+def init_pinecone():
     try:
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
-        client = gspread.authorize(creds)
-        return client
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        if INDEX_NAME not in pc.list_indexes().names():
+            pc.create_index(
+                name=INDEX_NAME,
+                dimension=EMBEDDING_DIMENSION,
+                metric="cosine",
+                spec=ServerlessSpec(cloud="aws", region="us-west-2")
+            )
+            while not pc.describe_index(INDEX_NAME).status['ready']:
+                time.sleep(1)
+        return pc.Index(INDEX_NAME)
     except Exception as e:
-        st.error(f"❌ Failed to connect to Google Sheets: {e}")
-        return None
+        st.error(f"Pinecone initialization failed: {str(e)}")
+        st.stop()
 
-# Function to fetch data
-@st.cache_data(ttl=600)  # Cache data for 10 minutes
-def fetch_data():
-    """Fetch and clean data from Google Sheets."""
-    client = connect_to_sheets()
-    if not client:
-        return None
+index = init_pinecone()
 
-    try:
-        sheet = client.open("H1B_Job_Data").sheet1  # Ensure this matches your actual sheet name
-        data = sheet.get_all_records()  # Fetch data as a list of dictionaries
-        df = pd.DataFrame(data)
-
-        # Validate required columns
-        if not REQUIRED_COLUMNS.issubset(df.columns):
-            st.error("❌ Data format issue: Required columns are missing.")
-            return None
-
-        # Clean data
-        df["WAGE_RATE_OF_PAY_FROM"] = pd.to_numeric(df["WAGE_RATE_OF_PAY_FROM"], errors="coerce")
-        df = df.dropna(subset=["WAGE_RATE_OF_PAY_FROM"])  # Drop rows with invalid salary data
-        return df
-
-    except Exception as e:
-        st.error(f"❌ Failed to fetch data: {e}")
-        return None
-
-# Function to create a PayPal payment
-def create_paypal_payment(amount, description):
-    """Create a PayPal payment and return the approval URL."""
-    payment = paypalrestsdk.Payment({
-        "intent": "sale",
-        "payer": {"payment_method": "paypal"},
-        "transactions": [{
-            "amount": {
-                "total": f"{amount:.2f}",
-                "currency": "USD"
-            },
-            "description": description
-        }],
-        "redirect_urls": {
-            "return_url": "https://your-streamlit-app-url.com/success",  # Replace with your app URL
-            "cancel_url": "https://your-streamlit-app-url.com/cancel"   # Replace with your app URL
-        }
-    })
-
-    if payment.create():
-        return payment
-    else:
-        st.error(f"❌ PayPal payment creation failed: {payment.error}")
-        return None
-
-# Streamlit UI
-st.title("🔍 H1B Job Data Search")
-st.markdown("### Secure, Pay-Per-Access Employment Records")
-
-# Load data
-df = fetch_data()
-if df is None or df.empty:
-    st.error("❌ No data available. Please try again later.")
+# Initialize models
+try:
+    embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    llm = ChatGroq(model="llama3-8b-8192", temperature=0, api_key=GROQ_API_KEY)
+except Exception as e:
+    st.error(f"Model initialization failed: {str(e)}")
     st.stop()
 
-# User Input Fields
-st.subheader("🔍 Search for H1B Job Data")
-employer_name = st.text_input("Enter Employer Name (or leave blank for all)", help="Partial matches supported")
-job_title = st.text_input("Enter Job Title (or leave blank for all)", help="Partial matches supported")
-salary_range = st.number_input("Minimum Salary ($)", min_value=0, step=1000, value=0, help="Filter by minimum wage")
+# LangGraph nodes and workflow (unchanged)
+def retrieve_jobs(state: AgentState):
+    try:
+        query_embedding = embedding_model.encode(state["resume_text"]).tolist()
+        results = index.query(
+            vector=query_embedding,
+            top_k=5,
+            include_metadata=True,
+            namespace="jobs"
+        )
+        jobs = [match.metadata for match in results.matches if match.metadata]
+        return {"jobs": jobs, "history": ["Retrieved jobs from Pinecone"]}
+    except Exception as e:
+        return {"error": str(e), "history": ["Job retrieval failed"]}
 
-# Filter Data
-filtered_df = df[
-    (df["EMPLOYER_NAME"].str.contains(employer_name, case=False, na=False) if employer_name else True) &
-    (df["JOB_TITLE"].str.contains(job_title, case=False, na=False) if job_title else True) &
-    (df["WAGE_RATE_OF_PAY_FROM"] >= salary_range)
-]
+def generate_analysis(state: AgentState):
+    if not state.get("jobs"):
+        return {"current_response": "No jobs found for analysis", "history": ["Skipped analysis"]}
+    
+    job_texts = "\n\n".join([f"Title: {job.get('Job Title')}\nCompany: {job.get('Company Name')}\nDescription: {job.get('Job Description', '')[:300]}" 
+                      for job in state["jobs"]])
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You're a career advisor. Analyze these jobs and give 3-5 brief recommendations:"),
+        ("human", f"Resume content will follow this message. Here are matching jobs:\n\n{job_texts}\n\nProvide concise, actionable advice for the applicant.")
+    ])
+    
+    try:
+        analysis = llm.invoke(prompt.format_messages()).content
+        return {"current_response": analysis, "history": ["Generated career analysis"]}
+    except Exception as e:
+        return {"error": str(e), "history": ["Analysis generation failed"]}
 
-# Show results summary
-num_records = len(filtered_df)
-st.write(f"🔹 **Matching Records:** {num_records}")
+def tailor_resume(state: AgentState):
+    if not state.get("selected_job"):
+        return {"current_response": "No job selected for tailoring", "history": ["Skipped tailoring"]}
+    
+    try:
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You're a professional resume writer. Tailor this resume for the specific job."),
+            ("human", f"Job Title: {state['selected_job']['Job Title']}\nJob Description:\n{state['selected_job'].get('Job Description', '')}\n\nResume:\n{state['resume_text']}\n\nProvide specific suggestions to modify the resume. Focus on matching keywords and required skills.")
+        ])
+        response = llm.invoke(prompt.format_messages())
+        return {"current_response": response.content, "history": ["Generated tailored resume suggestions"]}
+    except Exception as e:
+        return {"error": str(e), "history": ["Tailoring failed"]}
 
-if num_records > 0:
-    # Pricing calculation
-    total_price = max(num_records * PRICE_PER_ROW, MIN_PRICE)
-    st.write(f"💰 **Price: ${total_price:.2f}**")
+workflow = StateGraph(AgentState)
+workflow.add_node("retrieve_jobs", retrieve_jobs)
+workflow.add_node("generate_analysis", generate_analysis)
+workflow.add_node("tailor_resume", tailor_resume)
 
-    # Payment Button
-    if st.button("Proceed to Payment", type="primary"):
-        # Create PayPal payment
-        payment = create_paypal_payment(total_price, f"Payment for {num_records} H1B job records")
-        if payment:
-            # Redirect user to PayPal approval URL
-            for link in payment.links:
-                if link.method == "REDIRECT":
-                    redirect_url = link.href
-                    st.markdown(f"🔗 [Click here to complete your payment on PayPal]({redirect_url})", unsafe_allow_html=True)
-                    break
-else:
-    st.warning("⚠️ No matching records found. Try different search criteria.")
+workflow.set_entry_point("retrieve_jobs")
+workflow.add_edge("retrieve_jobs", "generate_analysis")
+workflow.add_conditional_edges(
+    "generate_analysis",
+    lambda x: "tailor_resume" if x.get("selected_job") else END,
+    {"tailor_resume": "tailor_resume", END: END}
+)
+workflow.add_edge("tailor_resume", END)
+app = workflow.compile()
 
-# Data Access After Payment (Simulated)
-if st.session_state.get("payment_confirmed"):
-    st.subheader("📥 Download Your Data")
-    st.download_button(
-        label="Download CSV",
-        data=filtered_df.to_csv(index=False).encode("utf-8"),
-        file_name="h1b_job_data.csv",
-        mime="text/csv"
-    )
+# Streamlit UI components
+def display_jobs_table(jobs):
+    if not jobs:
+        st.warning("No matching positions found")
+        return
+    
+    try:
+        jobs_df = pd.DataFrame([{
+            "Title": job.get("Job Title", "Not Available"),
+            "Company": job.get("Company Name", "Not Available"),
+            "Location": job.get("Location", "Not Specified"),
+            "Description": (job.get("Job Description", "")[:150] + "...") if job.get("Job Description") else "Description not available",
+            "Link": job.get("Job Link", "#")
+        } for job in jobs])
+        
+        st.markdown("### Matching Opportunities")
+        st.dataframe(
+            jobs_df,
+            column_config={
+                "Link": st.column_config.LinkColumn("View Position"),
+                "Description": "Position Summary"
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+    except Exception as e:
+        st.error(f"Error displaying positions: {str(e)}")
+
+# Authentication UI
+def authentication_ui():
+    with st.container():
+        st.markdown("## System Access")
+        with st.form("Login"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submit = st.form_submit_button("Authenticate")
+            
+            if submit:
+                user = get_user_by_username(username)
+                if user and verify_password(user[2], password):
+                    update_last_login(username)
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.rerun()
+                else:
+                    st.error("Authentication failed")
+
+# Main UI
+st.title("AI Career Platform")
+
+# Initialize session state
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.agent_state = {
+        "resume_text": "",
+        "jobs": [],
+        "history": [],
+        "current_response": "",
+        "selected_job": None
+    }
+
+# Show authentication if not logged in
+if not st.session_state.logged_in:
+    authentication_ui()
+    st.stop()
+
+# Logout button
+with st.sidebar:
+    if st.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.agent_state = {
+            "resume_text": "",
+            "jobs": [],
+            "history": [],
+            "current_response": "",
+            "selected_job": None
+        }
+        st.rerun()
+    st.write(f"Active session: {st.session_state.username}")
+
+# Main Application Functionality
+def main_application():
+    with st.form("resume_analysis"):
+        resume_text = st.text_area("Input professional summary or resume content:", 
+                                 height=250,
+                                 placeholder="Paste your resume text here...")
+        submitted = st.form_submit_button("Analyze Profile")
+        
+    if submitted and resume_text:
+        st.session_state.agent_state.update({
+            "resume_text": resume_text,
+            "selected_job": None
+        })
+        
+        # Execute workflow
+        for event in app.stream(st.session_state.agent_state):
+            for key, value in event.items():
+                st.session_state.agent_state.update(value)
+        
+        st.markdown("---")
+        with st.container():
+            st.markdown("### Career Strategy Analysis")
+            st.write(st.session_state.agent_state["current_response"])
+
+    # Tailoring interface
+    if st.session_state.agent_state.get("jobs"):
+        st.markdown("---")
+        display_jobs_table(st.session_state.agent_state["jobs"])
+        
+        st.markdown("---")
+        with st.container():
+            st.markdown("### Resume Optimization")
+            
+            job_titles = [job.get("Job Title", "Unspecified Position") for job in st.session_state.agent_state["jobs"]]
+            selected_title = st.selectbox("Select target position:", job_titles)
+            
+            if selected_title:
+                selected_job = next(
+                    job for job in st.session_state.agent_state["jobs"] 
+                    if job.get("Job Title") == selected_title
+                )
+                st.session_state.agent_state["selected_job"] = selected_job
+                
+                if st.button("Generate Customization Recommendations"):
+                    result = tailor_resume(st.session_state.agent_state)
+                    st.session_state.agent_state.update(result)
+                    
+                    st.markdown("### Professional Enhancement Suggestions")
+                    st.write(st.session_state.agent_state["current_response"])
+
+# Run main application
+main_application()
