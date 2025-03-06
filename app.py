@@ -38,8 +38,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Rest of your code...
-
 # Professional CSS styling
 st.markdown("""
 <style>
@@ -135,7 +133,7 @@ except Exception as e:
     st.error(f"Model initialization failed: {str(e)}")
     st.stop()
 
-# LangGraph nodes and workflow (unchanged)
+# LangGraph nodes and workflow
 def retrieve_jobs(state: AgentState):
     try:
         query_embedding = embedding_model.encode(state["resume_text"]).tolist()
@@ -197,7 +195,7 @@ workflow.add_conditional_edges(
 workflow.add_edge("tailor_resume", END)
 app = workflow.compile()
 
-# Streamlit UI components
+# Enhanced Job Table Component
 def display_jobs_table(jobs):
     if not jobs:
         st.warning("No matching positions found")
@@ -208,7 +206,9 @@ def display_jobs_table(jobs):
             "Title": job.get("Job Title", "Not Available"),
             "Company": job.get("Company Name", "Not Available"),
             "Location": job.get("Location", "Not Specified"),
-            "Description": (job.get("Job Description", "")[:150] + "...") if job.get("Job Description") else "Description not available",
+            "Posted Time": job.get("Posted Time", "Not specified"),
+            "Salary": job.get("Salary", "Not disclosed"),
+            "Experience": job.get("Years of Experience", "Not specified"),
             "Link": job.get("Job Link", "#")
         } for job in jobs])
         
@@ -217,10 +217,24 @@ def display_jobs_table(jobs):
             jobs_df,
             column_config={
                 "Link": st.column_config.LinkColumn("View Position"),
-                "Description": "Position Summary"
+                "Posted Time": st.column_config.DateColumn(
+                    "Posted On",
+                    format="YYYY-MM-DD",
+                    help="Date when the position was listed"
+                ),
+                "Salary": st.column_config.NumberColumn(
+                    "Annual Salary",
+                    format="$%d",
+                    help="Estimated yearly compensation"
+                ),
+                "Experience": st.column_config.NumberColumn(
+                    "Years Exp.",
+                    help="Required years of experience"
+                )
             },
             hide_index=True,
-            use_container_width=True
+            use_container_width=True,
+            height=(len(jobs_df) + 1) * 35 + 3
         )
     except Exception as e:
         st.error(f"Error displaying positions: {str(e)}")
@@ -301,7 +315,7 @@ def main_application():
             st.markdown("### Career Strategy Analysis")
             st.write(st.session_state.agent_state["current_response"])
 
-    # Tailoring interface
+    # Enhanced Tailoring Interface
     if st.session_state.agent_state.get("jobs"):
         st.markdown("---")
         display_jobs_table(st.session_state.agent_state["jobs"])
