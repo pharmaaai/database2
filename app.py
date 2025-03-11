@@ -351,27 +351,7 @@ def main_application():
                     st.markdown("### Professional Enhancement Suggestions")
                     st.write(st.session_state.agent_state["current_response"])
 
-                # Download functionality (only shows after optimizations)
-                if st.session_state.agent_state["current_response"] and st.session_state.agent_state["selected_job"]:
-                    try:
-                        doc = Document()
-                        doc.add_paragraph(st.session_state.agent_state["resume_text"])
-                        
-                        # Create in-memory file
-                        bio = io.BytesIO()
-                        doc.save(bio)
-                        
-                        # Download button
-                        st.download_button(
-                            label="📥 Download Tailored Resume",
-                            data=bio.getvalue(),
-                            file_name=f"Optimized_Resume_{selected_title.replace(' ', '_')}.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            help="Download your optimized resume in Microsoft Word format",
-                            key="unique_download_key"  # Prevent duplicate key errors
-                        )
-                    except Exception as e:
-                        st.error(f"Document generation error: {str(e)}")
+                
 
 # Run main application
 main_application()
