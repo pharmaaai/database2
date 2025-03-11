@@ -141,7 +141,7 @@ def retrieve_jobs(state: AgentState):
         query_embedding = embedding_model.encode(state["resume_text"]).tolist()
         results = index.query(
             vector=query_embedding,
-            top_k=5,
+            top_k=20,
             include_metadata=True,
             namespace="jobs"
         )
