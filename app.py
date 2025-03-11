@@ -323,27 +323,6 @@ def main_application():
         with st.container():
             st.markdown("### Career Strategy Analysis")
             st.write(st.session_state.agent_state["current_response"])
-            
-            # Resume download functionality
-            if st.session_state.agent_state["resume_text"]:
-                try:
-                    doc = Document()
-                    doc.add_paragraph(st.session_state.agent_state["resume_text"])
-                    
-                    # Create in-memory file
-                    bio = io.BytesIO()
-                    doc.save(bio)
-                    
-                    # Download button
-                    st.download_button(
-                        label="📥 Download Resume (Word Format)",
-                        data=bio.getvalue(),
-                        file_name="tailored_resume.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        help="Download your professionally tailored resume in Microsoft Word format"
-                    )
-                except Exception as e:
-                    st.error(f"Document generation error: {str(e)}")
 
     # Enhanced Tailoring Interface
     if st.session_state.agent_state.get("jobs"):
@@ -370,6 +349,26 @@ def main_application():
                     
                     st.markdown("### Professional Enhancement Suggestions")
                     st.write(st.session_state.agent_state["current_response"])
+                    
+                    # Resume download functionality moved here
+                    try:
+                        doc = Document()
+                        doc.add_paragraph(st.session_state.agent_state["resume_text"])
+                        
+                        # Create in-memory file
+                        bio = io.BytesIO()
+                        doc.save(bio)
+                        
+                        # Download button
+                        st.download_button(
+                            label="📥 Download Tailored Resume",
+                            data=bio.getvalue(),
+                            file_name="optimized_resume.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            help="Download your optimized resume in Microsoft Word format"
+                        )
+                    except Exception as e:
+                        st.error(f"Document generation error: {str(e)}")
 
 # Run main application
 main_application()
