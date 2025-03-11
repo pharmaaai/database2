@@ -311,7 +311,8 @@ def main_application():
     if submitted and resume_text:
         st.session_state.agent_state.update({
             "resume_text": resume_text,
-            "selected_job": None
+            "selected_job": None,
+            "current_response": ""  # Reset previous response
         })
         
         # Execute workflow
@@ -349,8 +350,9 @@ def main_application():
                     
                     st.markdown("### Professional Enhancement Suggestions")
                     st.write(st.session_state.agent_state["current_response"])
-                    
-                    # Resume download functionality moved here
+
+                # Download functionality (only shows after optimizations)
+                if st.session_state.agent_state["current_response"] and st.session_state.agent_state["selected_job"]:
                     try:
                         doc = Document()
                         doc.add_paragraph(st.session_state.agent_state["resume_text"])
@@ -363,9 +365,10 @@ def main_application():
                         st.download_button(
                             label="📥 Download Tailored Resume",
                             data=bio.getvalue(),
-                            file_name="optimized_resume.docx",
+                            file_name=f"Optimized_Resume_{selected_title.replace(' ', '_')}.docx",
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            help="Download your optimized resume in Microsoft Word format"
+                            help="Download your optimized resume in Microsoft Word format",
+                            key="unique_download_key"  # Prevent duplicate key errors
                         )
                     except Exception as e:
                         st.error(f"Document generation error: {str(e)}")
