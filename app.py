@@ -22,20 +22,14 @@ st.set_page_config(
 # Remove Streamlit UI elements
 st.markdown("""
 <style>
-    /* Hide header, footer, and menu */
     header { visibility: hidden; }
     .stApp > header { display: none; }
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
-    /* Hide deploy button */
     .stDeployButton { display: none; }
-    /* Hide 'Manage app' button */
     [data-testid="manage-app-button"] { display: none; }
-    /* Hide GitHub icon */
     [data-testid="stHeader"] [data-testid="stDecoration"] { display: none; }
-    /* Hide three-dot menu */
     [data-testid="stActionButton"] { display: none; }
-    /* Hide pen symbol */
     [data-testid="stToolbar"] { display: none; }
 </style>
 """, unsafe_allow_html=True)
@@ -197,32 +191,39 @@ workflow.add_conditional_edges(
 workflow.add_edge("tailor_resume", END)
 app = workflow.compile()
 
-# Enhanced Job Table Component
+# Updated Job Table Component with Date Fix
 def display_jobs_table(jobs):
     if not jobs:
         st.warning("No matching positions found")
         return
     
     try:
+        # Create DataFrame with original dates
         jobs_df = pd.DataFrame([{
             "Title": job.get("Job Title", "Not Available"),
             "Company": job.get("Company Name", "Not Available"),
             "Location": job.get("Location", "Not Specified"),
-            "Posted Time": job.get("Posted Time", "Not specified"),
+            "Posted Date": job.get("Posted Time", "Not specified"),
             "Salary": job.get("Salary", "Not disclosed"),
             "Experience": job.get("Years of Experience", "Not specified"),
             "Link": job.get("Job Link", "#")
         } for job in jobs])
         
+        # Convert and format dates
+        jobs_df['Posted Date'] = pd.to_datetime(
+            jobs_df['Posted Date'],
+            errors='coerce'
+        ).dt.strftime('%Y-%m-%d').fillna('Not specified')
+
         st.markdown("### Matching Opportunities")
         st.dataframe(
             jobs_df,
             column_config={
                 "Link": st.column_config.LinkColumn("View Position"),
-                "Posted Time": st.column_config.DateColumn(
-                    "Posted On",
+                "Posted Date": st.column_config.DateColumn(
+                    "Posted",
                     format="YYYY-MM-DD",
-                    help="Date when the position was listed"
+                    help="Original post date from job listing"
                 ),
                 "Salary": st.column_config.NumberColumn(
                     "Annual Salary",
@@ -293,7 +294,6 @@ with st.sidebar:
         st.rerun()
     st.write(f"Active session: {st.session_state.username}")
     
-    # Feedback section
     st.markdown("---")
     st.markdown(
         "**Help us improve!**  \n"
@@ -312,7 +312,7 @@ def main_application():
         st.session_state.agent_state.update({
             "resume_text": resume_text,
             "selected_job": None,
-            "current_response": ""  # Reset previous response
+            "current_response": ""
         })
         
         # Execute workflow
@@ -325,7 +325,6 @@ def main_application():
             st.markdown("### Career Strategy Analysis")
             st.write(st.session_state.agent_state["current_response"])
 
-    # Enhanced Tailoring Interface
     if st.session_state.agent_state.get("jobs"):
         st.markdown("---")
         display_jobs_table(st.session_state.agent_state["jobs"])
@@ -350,8 +349,6 @@ def main_application():
                     
                     st.markdown("### Professional Enhancement Suggestions")
                     st.write(st.session_state.agent_state["current_response"])
-
-                
 
 # Run main application
 main_application()
