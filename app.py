@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import io
 from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
 from langgraph.graph import StateGraph, END
@@ -9,6 +10,7 @@ from typing import TypedDict, List, Annotated
 import operator
 import time
 from database import init_db, get_user_by_username, verify_password, update_last_login
+from docx import Document
 
 # Set page config
 st.set_page_config(
@@ -277,7 +279,7 @@ if not st.session_state.logged_in:
     authentication_ui()
     st.stop()
 
-# Logout button
+# Enhanced Sidebar with Feedback Link
 with st.sidebar:
     if st.button("Logout"):
         st.session_state.logged_in = False
@@ -290,6 +292,13 @@ with st.sidebar:
         }
         st.rerun()
     st.write(f"Active session: {st.session_state.username}")
+    
+    # Feedback section
+    st.markdown("---")
+    st.markdown(
+        "**Help us improve!**  \n"
+        "[Share your feedback](https://docs.google.com/forms/d/1q0jT62gP6hdn0Pk-82GV_44a8A-PbkXDxRyPi4zidgs/edit)"
+    )
 
 # Main Application Functionality
 def main_application():
@@ -314,6 +323,27 @@ def main_application():
         with st.container():
             st.markdown("### Career Strategy Analysis")
             st.write(st.session_state.agent_state["current_response"])
+            
+            # Resume download functionality
+            if st.session_state.agent_state["resume_text"]:
+                try:
+                    doc = Document()
+                    doc.add_paragraph(st.session_state.agent_state["resume_text"])
+                    
+                    # Create in-memory file
+                    bio = io.BytesIO()
+                    doc.save(bio)
+                    
+                    # Download button
+                    st.download_button(
+                        label="📥 Download Resume (Word Format)",
+                        data=bio.getvalue(),
+                        file_name="tailored_resume.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        help="Download your professionally tailored resume in Microsoft Word format"
+                    )
+                except Exception as e:
+                    st.error(f"Document generation error: {str(e)}")
 
     # Enhanced Tailoring Interface
     if st.session_state.agent_state.get("jobs"):
