@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
-import io
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 from langgraph.graph import StateGraph, END
 from langchain_groq import ChatGroq
@@ -10,7 +9,6 @@ from typing import TypedDict, List, Annotated
 import operator
 import time
 from database import init_db, get_user_by_username, verify_password, update_last_login
-from docx import Document
 
 # Set page config
 st.set_page_config(
@@ -44,17 +42,11 @@ st.markdown("""
         border-radius: 4px;
         padding: 0.5rem 1rem;
         font-weight: 500;
-        transition: all 0.3s ease;
-    }
-    .stButton>button:hover {
-        background-color: #1a2833;
-        transform: translateY(-1px);
     }
     .stTextInput input, .stTextArea textarea {
         border: 1px solid #dee2e6;
         border-radius: 4px;
         padding: 10px;
-        font-size: 14px;
     }
     .stDataFrame {
         border: 1px solid #e0e0e0;
@@ -64,22 +56,10 @@ st.markdown("""
     .stMarkdown h1 {
         color: #2c3e50;
         border-bottom: 2px solid #2c3e50;
-        padding-bottom: 0.5rem;
-    }
-    .stMarkdown h2 {
-        color: #34495e;
-        margin-top: 1.5rem;
     }
     .stSidebar {
         background-color: #f8f9fa;
-        padding: 20px;
         border-right: 1px solid #e0e0e0;
-    }
-    .analysis-section {
-        background-color: #f8f9fa;
-        padding: 1.5rem;
-        border-radius: 8px;
-        margin: 1rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -91,7 +71,6 @@ init_db()
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 INDEX_NAME = "rajan"
-EMBEDDING_DIMENSION = 384
 
 # Define State for LangGraph
 class AgentState(TypedDict):
@@ -103,252 +82,161 @@ class AgentState(TypedDict):
 
 # Initialize Pinecone
 def init_pinecone():
-    try:
-        pc = Pinecone(api_key=PINECONE_API_KEY)
-        if INDEX_NAME not in pc.list_indexes().names():
-            pc.create_index(
-                name=INDEX_NAME,
-                dimension=EMBEDDING_DIMENSION,
-                metric="cosine",
-                spec=ServerlessSpec(cloud="aws", region="us-west-2")
-            )
-            while not pc.describe_index(INDEX_NAME).status['ready']:
-                time.sleep(1)
-        return pc.Index(INDEX_NAME)
-    except Exception as e:
-        st.error(f"Pinecone initialization failed: {str(e)}")
-        st.stop()
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+    if INDEX_NAME not in pc.list_indexes().names():
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=384,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-west-2")
+        )
+        while not pc.describe_index(INDEX_NAME).status['ready']:
+            time.sleep(1)
+    return pc.Index(INDEX_NAME)
 
 index = init_pinecone()
 
 # Initialize models
-try:
-    embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-    llm = ChatGroq(model="llama3-8b-8192", temperature=0, api_key=GROQ_API_KEY)
-except Exception as e:
-    st.error(f"Model initialization failed: {str(e)}")
-    st.stop()
+embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+llm = ChatGroq(model="llama3-8b-8192", temperature=0, api_key=GROQ_API_KEY)
 
-# LangGraph nodes and workflow
+# LangGraph workflow
 def retrieve_jobs(state: AgentState):
-    try:
-        query_embedding = embedding_model.encode(state["resume_text"]).tolist()
-        results = index.query(
-            vector=query_embedding,
-            top_k=30,
-            include_metadata=True,
-            namespace="jobs"
-        )
-        jobs = [match.metadata for match in results.matches if match.metadata]
-        return {"jobs": jobs, "history": ["Retrieved jobs from Pinecone"]}
-    except Exception as e:
-        return {"error": str(e), "history": ["Job retrieval failed"]}
+    query_embedding = embedding_model.encode(state["resume_text"]).tolist()
+    results = index.query(
+        vector=query_embedding,
+        top_k=30,
+        include_metadata=True,
+        namespace="jobs"
+    )
+    return {"jobs": [match.metadata for match in results.matches if match.metadata]}
 
 def generate_analysis(state: AgentState):
-    if not state.get("jobs"):
-        return {"current_response": "No jobs found for analysis", "history": ["Skipped analysis"]}
-    
-    job_texts = "\n\n".join([f"Title: {job.get('Job Title')}\nCompany: {job.get('Company Name')}\nDescription: {job.get('Job Description', '')[:300]}" 
-                      for job in state["jobs"]])
-    
+    job_texts = "\n\n".join([f"Title: {job['Job Title']}\nCompany: {job['Company Name']}" 
+                            for job in state["jobs"]])
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "You're a career advisor. Analyze these jobs and give 3-5 brief recommendations:"),
-        ("human", f"Resume content will follow this message. Here are matching jobs:\n\n{job_texts}\n\nProvide concise, actionable advice for the applicant.")
+        ("system", "You're a career advisor. Analyze these jobs:"),
+        ("human", f"Resume: {state['resume_text']}\nJobs:\n{job_texts}")
     ])
-    
-    try:
-        analysis = llm.invoke(prompt.format_messages()).content
-        return {"current_response": analysis, "history": ["Generated career analysis"]}
-    except Exception as e:
-        return {"error": str(e), "history": ["Analysis generation failed"]}
+    return {"current_response": llm.invoke(prompt).content}
 
 def tailor_resume(state: AgentState):
-    if not state.get("selected_job"):
-        return {"current_response": "No job selected for tailoring", "history": ["Skipped tailoring"]}
-    
-    try:
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "You're a professional resume writer. Tailor this resume for the specific job."),
-            ("human", f"Job Title: {state['selected_job']['Job Title']}\nJob Description:\n{state['selected_job'].get('Job Description', '')}\n\nResume:\n{state['resume_text']}\n\nProvide specific suggestions to modify the resume. Focus on matching keywords and required skills.")
-        ])
-        response = llm.invoke(prompt.format_messages())
-        return {"current_response": response.content, "history": ["Generated tailored resume suggestions"]}
-    except Exception as e:
-        return {"error": str(e), "history": ["Tailoring failed"]}
+    job = state["selected_job"]
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "Tailor this resume for the job:"),
+        ("human", f"Job: {job['Job Title']}\n{job['Job Description']}\nResume: {state['resume_text']}")
+    ])
+    return {"current_response": llm.invoke(prompt).content}
 
 workflow = StateGraph(AgentState)
 workflow.add_node("retrieve_jobs", retrieve_jobs)
 workflow.add_node("generate_analysis", generate_analysis)
 workflow.add_node("tailor_resume", tailor_resume)
-
 workflow.set_entry_point("retrieve_jobs")
 workflow.add_edge("retrieve_jobs", "generate_analysis")
-workflow.add_conditional_edges(
-    "generate_analysis",
-    lambda x: "tailor_resume" if x.get("selected_job") else END,
-    {"tailor_resume": "tailor_resume", END: END}
-)
+workflow.add_conditional_edges("generate_analysis", 
+                              lambda x: "tailor_resume" if x.get("selected_job") else END,
+                              {"tailor_resume": "tailor_resume", END: END})
 workflow.add_edge("tailor_resume", END)
 app = workflow.compile()
 
-# Updated Job Table Component with Date Fix
+# Job display with original LinkedIn text
 def display_jobs_table(jobs):
-    if not jobs:
-        st.warning("No matching positions found")
-        return
-    
-    try:
-        # Create DataFrame with original dates
-        jobs_df = pd.DataFrame([{
-            "Title": job.get("Job Title", "Not Available"),
-            "Company": job.get("Company Name", "Not Available"),
-            "Location": job.get("Location", "Not Specified"),
-            "Posted Date": job.get("Posted Time", "Not specified"),
-            "Salary": job.get("Salary", "Not disclosed"),
-            "Experience": job.get("Years of Experience", "Not specified"),
-            "Link": job.get("Job Link", "#")
-        } for job in jobs])
-        
-        # Convert and format dates
-        jobs_df['Posted Date'] = pd.to_datetime(
-            jobs_df['Posted Date'],
-            errors='coerce'
-        ).dt.strftime('%Y-%m-%d').fillna('Not specified')
+    jobs_df = pd.DataFrame([{
+        "Title": job.get("Job Title", ""),
+        "Company": job.get("Company Name", ""),
+        "Location": job.get("Location", ""),
+        "Posted": job.get("Posted Time", ""),  # Raw LinkedIn text
+        "Salary": job.get("Salary", ""),
+        "Experience": job.get("Years of Experience", ""),
+        "Link": job.get("Job Link", "")
+    } for job in jobs])
 
-        st.markdown("### Matching Opportunities")
-        st.dataframe(
-            jobs_df,
-            column_config={
-                "Link": st.column_config.LinkColumn("View Position"),
-                "Posted Date": st.column_config.DateColumn(
-                    "Posted",
-                    format="YYYY-MM-DD",
-                    help="Original post date from job listing"
-                ),
-                "Salary": st.column_config.NumberColumn(
-                    "Annual Salary",
-                    format="$%d",
-                    help="Estimated yearly compensation"
-                ),
-                "Experience": st.column_config.NumberColumn(
-                    "Years Exp.",
-                    help="Required years of experience"
-                )
-            },
-            hide_index=True,
-            use_container_width=True,
-            height=(len(jobs_df) + 1) * 35 + 3
-        )
-    except Exception as e:
-        st.error(f"Error displaying positions: {str(e)}")
+    st.dataframe(
+        jobs_df,
+        column_config={
+            "Link": st.column_config.LinkColumn("View"),
+            "Posted": st.column_config.TextColumn(  # Text instead of Date
+                "Posted",
+                help="Original LinkedIn posting text"
+            ),
+            "Salary": st.column_config.NumberColumn(
+                "Salary",
+                format="$%d"
+            )
+        },
+        hide_index=True,
+        use_container_width=True
+    )
 
-# Authentication UI
+# Authentication
 def authentication_ui():
-    with st.container():
-        st.markdown("## System Access")
-        with st.form("Login"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submit = st.form_submit_button("Authenticate")
-            
-            if submit:
-                user = get_user_by_username(username)
-                if user and verify_password(user[2], password):
-                    update_last_login(username)
-                    st.session_state.logged_in = True
-                    st.session_state.username = username
-                    st.rerun()
-                else:
-                    st.error("Authentication failed")
+    with st.form("Login"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.form_submit_button("Login"):
+            user = get_user_by_username(username)
+            if user and verify_password(user[2], password):
+                update_last_login(username)
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
 
-# Main UI
-st.title("AI Career Platform")
-
-# Initialize session state
+# Main app
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.agent_state = {
         "resume_text": "",
         "jobs": [],
-        "history": [],
         "current_response": "",
         "selected_job": None
     }
 
-# Show authentication if not logged in
 if not st.session_state.logged_in:
     authentication_ui()
     st.stop()
 
-# Enhanced Sidebar with Feedback Link
+# Sidebar
 with st.sidebar:
     if st.button("Logout"):
         st.session_state.logged_in = False
-        st.session_state.agent_state = {
-            "resume_text": "",
-            "jobs": [],
-            "history": [],
-            "current_response": "",
-            "selected_job": None
-        }
         st.rerun()
-    st.write(f"Active session: {st.session_state.username}")
-    
-    st.markdown("---")
-    st.markdown(
-        "**Help us improve!**  \n"
-        "[Share your feedback](https://docs.google.com/forms/d/1q0jT62gP6hdn0Pk-82GV_44a8A-PbkXDxRyPi4zidgs/edit)"
-    )
+    st.write(f"User: {st.session_state.get('username', '')}")
 
-# Main Application Functionality
+# Main interface
 def main_application():
     with st.form("resume_analysis"):
-        resume_text = st.text_area("Input professional summary or resume content:", 
-                                 height=250,
-                                 placeholder="Paste your resume text here...")
-        submitted = st.form_submit_button("Analyze Profile")
-        
-    if submitted and resume_text:
-        st.session_state.agent_state.update({
-            "resume_text": resume_text,
-            "selected_job": None,
-            "current_response": ""
-        })
-        
-        # Execute workflow
-        for event in app.stream(st.session_state.agent_state):
-            for key, value in event.items():
-                st.session_state.agent_state.update(value)
-        
-        st.markdown("---")
-        with st.container():
-            st.markdown("### Career Strategy Analysis")
-            st.write(st.session_state.agent_state["current_response"])
+        resume_text = st.text_area("Paste your resume", height=250)
+        if st.form_submit_button("Analyze"):
+            st.session_state.agent_state.update({
+                "resume_text": resume_text,
+                "selected_job": None
+            })
+            for event in app.stream(st.session_state.agent_state):
+                st.session_state.agent_state.update(event.get("__end__", {}))
 
-    if st.session_state.agent_state.get("jobs"):
-        st.markdown("---")
+    if st.session_state.agent_state["current_response"]:
+        st.subheader("Analysis")
+        st.write(st.session_state.agent_state["current_response"])
+
+    if st.session_state.agent_state["jobs"]:
+        st.subheader("Matching Jobs")
         display_jobs_table(st.session_state.agent_state["jobs"])
-        
-        st.markdown("---")
-        with st.container():
-            st.markdown("### Resume Optimization")
-            
-            job_titles = [job.get("Job Title", "Unspecified Position") for job in st.session_state.agent_state["jobs"]]
-            selected_title = st.selectbox("Select target position:", job_titles)
-            
-            if selected_title:
-                selected_job = next(
-                    job for job in st.session_state.agent_state["jobs"] 
-                    if job.get("Job Title") == selected_title
-                )
-                st.session_state.agent_state["selected_job"] = selected_job
-                
-                if st.button("Generate Customization Recommendations"):
-                    result = tailor_resume(st.session_state.agent_state)
-                    st.session_state.agent_state.update(result)
-                    
-                    st.markdown("### Professional Enhancement Suggestions")
-                    st.write(st.session_state.agent_state["current_response"])
 
-# Run main application
+        selected_job = st.selectbox(
+            "Select job to tailor resume",
+            [job["Job Title"] for job in st.session_state.agent_state["jobs"]]
+        )
+        if selected_job:
+            st.session_state.agent_state["selected_job"] = next(
+                job for job in st.session_state.agent_state["jobs"]
+                if job["Job Title"] == selected_job
+            )
+            if st.button("Generate Tailoring Suggestions"):
+                result = tailor_resume(st.session_state.agent_state)
+                st.session_state.agent_state.update(result)
+                st.subheader("Tailoring Suggestions")
+                st.write(st.session_state.agent_state["current_response"])
+
 main_application()
