@@ -61,12 +61,6 @@ st.markdown("""
         background-color: #f8f9fa;
         border-right: 1px solid #e0e0e0;
     }
-    .feedback-link {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        z-index: 1000;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -208,29 +202,19 @@ if 'logged_in' not in st.session_state:
         "jobs": [],
         "current_response": "",
         "selected_job": None,
-        "history": []
+        "history": []  # Added missing field
     }
 
 if not st.session_state.logged_in:
     authentication_ui()
     st.stop()
 
-# Sidebar with feedback link
+# Sidebar
 with st.sidebar:
     if st.button("Logout"):
         st.session_state.logged_in = False
         st.rerun()
     st.write(f"User: {st.session_state.get('username', '')}")
-    
-    # Feedback link in sidebar
-    st.markdown(
-        """<div class='feedback-link'>
-        <a href="https://docs.google.com/forms/d/1q0jT62gP6hdn0Pk-82GV_44a8A-PbkXDxRyPi4zidgs/edit" target="_blank">
-        📝 Provide Feedback
-        </a>
-        </div>""",
-        unsafe_allow_html=True
-    )
 
 # Main interface
 def main_application():
@@ -240,10 +224,10 @@ def main_application():
             st.session_state.agent_state.update({
                 "resume_text": resume_text,
                 "selected_job": None,
-                "history": []
+                "history": []  # Reset history on new analysis
             })
             for event in app.stream(st.session_state.agent_state):
-                st.session_state.agent_state.update(event.get("__end__", {}))
+                st.session_state.agent_state.update(event.get("_end_", {}))
 
     if st.session_state.agent_state["current_response"]:
         st.subheader("Analysis")
