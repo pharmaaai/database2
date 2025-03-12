@@ -227,7 +227,7 @@ def main_application():
                 "history": []  # Reset history on new analysis
             })
             for event in app.stream(st.session_state.agent_state):
-                st.session_state.agent_state.update(event.get("_end_", {}))
+                st.session_state.agent_state.update(event.get("__end__", {}))
 
     if st.session_state.agent_state["current_response"]:
         st.subheader("Analysis")
