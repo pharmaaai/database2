@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from pinecone import Pinecone
+from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
 from langgraph.graph import StateGraph, END
 from langchain_groq import ChatGroq
@@ -114,19 +114,30 @@ def retrieve_jobs(state: AgentState):
 def generate_analysis(state: AgentState):
     job_texts = "\n\n".join([f"Title: {job['Job Title']}\nCompany: {job['Company Name']}" 
                             for job in state["jobs"]])
-    prompt = ChatPromptTemplate.from_messages([
+    prompt_template = ChatPromptTemplate.from_messages([
         ("system", "You're a career advisor. Analyze these jobs:"),
-        ("human", f"Resume: {state['resume_text']}\nJobs:\n{job_texts}")
+        ("human", "Resume: {resume_text}\nJobs:\n{job_texts}")
     ])
-    return {"current_response": llm.invoke(prompt).content}
+    messages = prompt_template.format_messages(
+        resume_text=state["resume_text"],
+        job_texts=job_texts
+    )
+    response = llm.invoke(messages)
+    return {"current_response": response.content}
 
 def tailor_resume(state: AgentState):
     job = state["selected_job"]
-    prompt = ChatPromptTemplate.from_messages([
+    prompt_template = ChatPromptTemplate.from_messages([
         ("system", "Tailor this resume for the job:"),
-        ("human", f"Job: {job['Job Title']}\n{job['Job Description']}\nResume: {state['resume_text']}")
+        ("human", "Job: {job_title}\n{job_description}\nResume: {resume_text}")
     ])
-    return {"current_response": llm.invoke(prompt).content}
+    messages = prompt_template.format_messages(
+        job_title=job['Job Title'],
+        job_description=job['Job Description'],
+        resume_text=state["resume_text"]
+    )
+    response = llm.invoke(messages)
+    return {"current_response": response.content}
 
 workflow = StateGraph(AgentState)
 workflow.add_node("retrieve_jobs", retrieve_jobs)
@@ -156,7 +167,7 @@ def display_jobs_table(jobs):
         jobs_df,
         column_config={
             "Link": st.column_config.LinkColumn("View"),
-            "Posted": st.column_config.TextColumn(  # Text instead of Date
+            "Posted": st.column_config.TextColumn(
                 "Posted",
                 help="Original LinkedIn posting text"
             ),
@@ -190,7 +201,8 @@ if 'logged_in' not in st.session_state:
         "resume_text": "",
         "jobs": [],
         "current_response": "",
-        "selected_job": None
+        "selected_job": None,
+        "history": []  # Added missing field
     }
 
 if not st.session_state.logged_in:
@@ -211,7 +223,8 @@ def main_application():
         if st.form_submit_button("Analyze"):
             st.session_state.agent_state.update({
                 "resume_text": resume_text,
-                "selected_job": None
+                "selected_job": None,
+                "history": []  # Reset history on new analysis
             })
             for event in app.stream(st.session_state.agent_state):
                 st.session_state.agent_state.update(event.get("__end__", {}))
