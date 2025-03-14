@@ -253,3 +253,78 @@ def main_application():
                 st.write(st.session_state.agent_state["current_response"])
 
 main_application()
+
+# Add Tableau visualization at the bottom
+st.markdown("<hr>", unsafe_allow_html=True)
+st.subheader("H1B Visa Sponsorships (Leading Life Science Companies 2024)")
+
+# Add this at the bottom after your main application code
+from streamlit.components.v1 import html
+
+tableau_code = """
+<div class='tableauPlaceholder' id='viz1738751341715' style='position: relative; overflow: hidden;'>
+<object class='tableauViz' style='display:none;'>
+<param name='host_url' value='https%3A%2F%2Fpublic.tableau.com%2F' />
+<param name='embed_code_version' value='3' />
+<param name='site_root' value='' />
+<param name='name' value='nfljnvjlnjvlnjlv/LifeScience' />
+<param name='tabs' value='no' />
+<param name='toolbar' value='hidden' />
+<param name='static_image' value='https://public.tableau.com/static/images/nf/nfljnvjlnjvlnjlv/LifeScience/1.png' />
+<param name='animate_transition' value='yes' />
+<param name='display_static_image' value='yes' />
+<param name='display_spinner' value='yes' />
+<param name='display_overlay' value='no' />
+<param name='display_count' value='no' />
+<param name='language' value='en-US' />
+<param name='filter' value='publish=yes' />
+</object>
+</div>
+<script type='text/javascript'>
+document.addEventListener('DOMContentLoaded', function() {
+    var divElement = document.getElementById('viz1738751341715');
+    var vizElement = divElement.getElementsByTagName('object')[0];
+    
+    // Hide Tableau branding and controls
+    vizElement.style.width = '100%';
+    vizElement.style.height = '600px';  // Fixed height or use calc(100vh - 400px)
+    vizElement.style.border = 'none';
+    
+    // Remove unwanted elements after load
+    function cleanTableauUI() {
+        try {
+            // Remove Tableau public banner
+            var publicBanner = vizElement.contentDocument.querySelector('.tab-public-banner');
+            if (publicBanner) publicBanner.style.display = 'none';
+            
+            // Remove download and share buttons
+            var toolbar = vizElement.contentDocument.querySelector('.tab-toolbar');
+            if (toolbar) toolbar.style.display = 'none';
+            
+            // Remove "View in Tableau Public" text
+            var viewLinks = vizElement.contentDocument.querySelectorAll('a[target="_blank"]');
+            viewLinks.forEach(link => link.style.display = 'none');
+        } catch(e) {
+            // Retry if iframe not loaded yet
+            setTimeout(cleanTableauUI, 100);
+        }
+    }
+    
+    // Initial cleanup attempt
+    cleanTableauUI();
+    
+    // Add resize observer
+    new ResizeObserver(entries => {
+        vizElement.style.height = '600px';  // Maintain fixed height or adjust as needed
+    }).observe(divElement);
+
+    // Load Tableau script
+    var scriptElement = document.createElement('script');
+    scriptElement.src = 'https://public.tableau.com/javascripts/api/viz_v1.js';
+    vizElement.parentNode.insertBefore(scriptElement, vizElement);
+});
+</script>
+"""
+
+
+html(tableau_code, width=1200, height=650, scrolling=False)
