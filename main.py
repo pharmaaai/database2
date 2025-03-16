@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from streamlit.components.v1 import html
 from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
 from langgraph.graph import StateGraph, END
@@ -151,15 +152,15 @@ workflow.add_conditional_edges("generate_analysis",
 workflow.add_edge("tailor_resume", END)
 app = workflow.compile()
 
-# Job display with original LinkedIn text
 def display_jobs_table(jobs):
     jobs_df = pd.DataFrame([{
         "Title": job.get("Job Title", ""),
         "Company": job.get("Company Name", ""),
         "Location": job.get("Location", ""),
-        "Posted": job.get("Posted Time", ""),  # Raw LinkedIn text
+        "Job Portal Posted Time": job.get("Posted Time", ""),  # Original portal text
         "Salary": job.get("Salary", ""),
         "Experience": job.get("Years of Experience", ""),
+        "Pharma AI Posted Date": job.get("Posted date of Pharma AI", ""),  # New column
         "Link": job.get("Job Link", "")
     } for job in jobs])
 
@@ -167,9 +168,13 @@ def display_jobs_table(jobs):
         jobs_df,
         column_config={
             "Link": st.column_config.LinkColumn("View"),
-            "Posted": st.column_config.TextColumn(
-                "Posted",
-                help="Original LinkedIn posting text"
+            "Job Portal Posted Time": st.column_config.TextColumn(
+                "Portal Post Time",
+                help="Original job portal posting text"
+            ),
+            "Pharma AI Posted Date": st.column_config.TextColumn(
+                "Pharma AI Processed",
+                help="Date when Pharma AI processed the job"
             ),
             "Salary": st.column_config.NumberColumn(
                 "Salary",
